@@ -265,7 +265,7 @@ class PSSLMutexArray : public PSSLMutexArrayBase
 class PSSL_BIO
 {
   public:
-    PSSL_BIO(BIO_METHOD *method = BIO_s_file_internal())
+    PSSL_BIO(const BIO_METHOD *method = BIO_s_file())
       { bio = BIO_new(method); }
 
     ~PSSL_BIO()
@@ -763,9 +763,13 @@ PSSLDiffieHellman::PSSLDiffieHellman(const BYTE * pData, PINDEX pSize,
   if (dh == NULL)
     return;
 
-  dh->p = BN_bin2bn(pData, pSize, NULL);
-  dh->g = BN_bin2bn(gData, gSize, NULL);
-  if (dh->p != NULL && dh->g != NULL)
+  BIGNUM *p = BN_bin2bn(pData, pSize, NULL);
+  BIGNUM *g = BN_bin2bn(gData, gSize, NULL);
+  DH_set0_pqg(dh, p, NULL, g);
+  if (p != NULL && p != NULL)
+  //dh->p = BN_bin2bn(pData, pSize, NULL);
+  //dh->g = BN_bin2bn(gData, gSize, NULL);
+  //if (dh->p != NULL && dh->g != NULL)
     return;
 
   DH_free(dh);
@@ -1218,7 +1222,8 @@ BOOL PSSLChannel::RawSSLRead(void * buf, PINDEX & len)
 //
 
 
-#define PSSLCHANNEL(bio)      ((PSSLChannel *)(bio->ptr))
+//#define PSSLCHANNEL(bio)      ((PSSLChannel *)(bio->ptr))
+#define PSSLCHANNEL(bio)      ((PSSLChannel *)BIO_get_data(bio))
 
 extern "C" {
 
@@ -1231,11 +1236,13 @@ typedef long (*lfptr)();
 
 static int Psock_new(BIO * bio)
 {
-  bio->init     = 0;
-  bio->num      = 0;
-  bio->ptr      = NULL;    // this is really (PSSLChannel *)
-  bio->flags    = 0;
-
+  //bio->init     = 0;
+  //bio->num      = 0;
+  //bio->ptr      = NULL;    // this is really (PSSLChannel *)
+  //bio->flags    = 0;
+  BIO_set_init(bio, 0);
+  BIO_set_data(bio, NULL);
+  BIO_clear_flags(bio, ~0);
   return(1);
 }
 
@@ -1245,13 +1252,17 @@ static int Psock_free(BIO * bio)
   if (bio == NULL)
     return 0;
 
-  if (bio->shutdown) {
-    if (bio->init) {
+//  if (bio->shutdown) {
+//    if (bio->init) {
+  if (BIO_get_shutdown(bio)) {
+    if (BIO_get_init(bio)) {
       PSSLCHANNEL(bio)->Shutdown(PSocket::ShutdownReadAndWrite);
       PSSLCHANNEL(bio)->Close();
     }
-    bio->init  = 0;
-    bio->flags = 0;
+//    bio->init  = 0;
+//    bio->flags = 0;
+    BIO_set_init(bio, 0);
+    BIO_clear_flags(bio, ~0);
   }
   return 1;
 }
@@ -1261,11 +1272,13 @@ static long Psock_ctrl(BIO * bio, int cmd, long num, void * /*ptr*/)
 {
   switch (cmd) {
     case BIO_CTRL_SET_CLOSE:
-      bio->shutdown = (int)num;
+//      bio->shutdown = (int)num;
+      BIO_set_shutdown(bio, (int)num);
       return 1;
 
     case BIO_CTRL_GET_CLOSE:
-      return bio->shutdown;
+//      return bio->shutdown;
+      return BIO_get_shutdown(bio);
 
     case BIO_CTRL_FLUSH:
       return 1;
@@ -1339,7 +1352,8 @@ static int Psock_puts(BIO * bio, const char * str)
 
 };
 
-
+static BIO_METHOD *methods_Psock = NULL;
+/*
 static BIO_METHOD methods_Psock =
 {
   BIO_TYPE_SOCKET,
@@ -1362,19 +1376,37 @@ static BIO_METHOD methods_Psock =
   Psock_free
 #endif
 };
-
+*/
 
 BOOL PSSLChannel::OnOpen()
 {
-  BIO * bio = BIO_new(&methods_Psock);
+//  BIO * bio = BIO_new(&methods_Psock);
+  if (methods_Psock == NULL) {
+    methods_Psock = BIO_meth_new(BIO_TYPE_SOCKET | BIO_get_new_index(), "PTLib-PSSLChannel");
+    if (methods_Psock == NULL ||
+        BIO_meth_set_write(methods_Psock, Psock_write) ||
+	BIO_meth_set_read(methods_Psock, Psock_read) ||
+	BIO_meth_set_puts(methods_Psock, Psock_puts) ||
+	BIO_meth_set_gets(methods_Psock, NULL) ||
+	BIO_meth_set_ctrl(methods_Psock, Psock_ctrl) ||
+	BIO_meth_set_create(methods_Psock, Psock_new) ||
+	BIO_meth_set_destroy(methods_Psock, Psock_free)) {
+      SSLerr(SSL_F_SSL_SET_FD,ERR_R_BUF_LIB);
+      return FALSE;
+    }
+  }
+  BIO * bio = BIO_new(methods_Psock);
+
   if (bio == NULL) {
     SSLerr(SSL_F_SSL_SET_FD,ERR_R_BUF_LIB);
     return FALSE;
   }
 
   // "Open" then bio
-  bio->ptr  = this;
-  bio->init = 1;
+//  bio->ptr  = this;
+//  bio->init = 1;
+  BIO_set_data(bio, this);
+  BIO_set_init(bio, 1);
 
   SSL_set_bio(ssl, bio, bio);
   return TRUE;

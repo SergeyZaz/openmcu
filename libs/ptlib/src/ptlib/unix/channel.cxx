@@ -161,7 +161,7 @@
 
 #include <ptlib.h>
 #include <sys/ioctl.h>
-
+#include <sys/uio.h>
 
 #include "../common/pchannel.cxx"
 
